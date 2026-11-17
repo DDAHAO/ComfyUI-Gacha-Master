@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "description": "Real-host acceptance cases. These definitions are executed by tools/host_acceptance scripts and reported with provenance; a case is not PASS because a screenshot exists.",
+  "cases": {
+    "H06-A": {
+      "title": "single-source multi-page 101 OUT",
+      "data": "real_gpu 1x101 job or independently validated equivalent; fixture only if explicitly labelled",
+      "steps": [
+        "open the job in the real ComfyUI host",
+        "open the source result strip",
+        "navigate first/next/previous/last across 50/51 and 100/101",
+        "switch to compare view and return",
+        "revisit a page after cache eviction"
+      ],
+      "assertions": [
+        "all 101 OUT reachable exactly once",
+        "page 1 has 50, page 2 has 50, page 3 has 1",
+        "order stays SRC-0001/OUT-0001..0101",
+        "no image from another source",
+        "cache eviction and revisit still works"
+      ]
+    },
+    "H06-B": {
+      "title": "selection on first and third result page survives navigation and freezes into export",
+      "data": "same job as H06-A",
+      "steps": [
+        "select one OUT on page 1 and one on page 3",
+        "leave detail and return",
+        "refresh the page",
+        "toggle compare and return",
+        "run FINAL export with per-source review"
+      ],
+      "assertions": [
+        "stars read back from server",
+        "frozen members equal the selected output ids",
+        "export manifest, DB rows and copied files agree",
+        "no duplicate or missing member"
+      ]
+    },
+    "H06-C": {
+      "title": "real host with 5000-source/10000-OUT fixture",
+      "data": "fixture",
+      "steps": [
+        "seed an isolated runtime with seed_fixture.py",
+        "start the real ComfyUI host against that runtime",
+        "open the fixture job",
+        "navigate to the last source page and jump to a numbered source",
+        "open a late source result strip"
+      ],
+      "assertions": [
+        "all 5000 sources locatable",
+        "last page contains SRC-4961..5000",
+        "jump to SRC-4321 works",
+        "source requests use bounded limit",
+        "no full result read on job open"
+      ]
+    },
+    "H06-D": {
+      "title": "network failure and late responses during paging",
+      "data": "same job as H06-A",
+      "steps": [
+        "fail a later page request and retry",
+        "delay an old page response, then switch source/job",
+        "toggle compare while a page request is in flight"
+      ],
+      "assertions": [
+        "existing page remains mounted",
+        "cursor does not advance on failure",
+        "late response does not overwrite the new context",
+        "no permanent loading state",
+        "no duplicate selection write"
+      ]
+    },
+    "UI01": {
+      "title": "viewport, sidebar, zoom and theme",
+      "data": "real host + production-like job",
+      "steps": [
+        "1280x640 viewport, ~320px sidebar",
+        "100% and 200% zoom",
+        "dark and light theme"
+      ],
+      "assertions": [
+        "create/pause/page/select/export/error remain visible and operable",
+        "no overflow blocks primary actions"
+      ]
+    },
+    "UI02": {
+      "title": "keyboard and focus",
+      "data": "real host",
+      "steps": [
+        "Tab/Shift+Tab through controls",
+        "Enter/Escape on dialogs",
+        "arrow keys/Space on result cards",
+        "toggle compare and return focus",
+        "modal close returns focus"
+      ],
+      "assertions": [
+        "focus visible",
+        "typing does not change selection",
+        "modal close returns focus to a sensible control",
+        "no duplicate selection"
+      ]
+    },
+    "UI03": {
+      "title": "reduced motion",
+      "data": "real host",
+      "steps": [
+        "emulate prefers-reduced-motion: reduce",
+        "create, page, select, export"
+      ],
+      "assertions": [
+        "core state remains visible",
+        "continuous/large animations are suppressed",
+        "interaction completion does not depend on animation"
+      ]
+    },
+    "UI04": {
+      "title": "native file chooser upload",
+      "data": "real host",
+      "steps": [
+        "choose files through the browser file chooser",
+        "cancel the chooser",
+        "retry after a rejected image"
+      ],
+      "assertions": [
+        "filename/order/hash match the draft",
+        "cancel creates no partial source",
+        "retry does not duplicate a source"
+      ]
+    },
+    "UI05": {
+      "title": "image failure, slow response and browser offline",
+      "data": "real host",
+      "steps": [
+        "fail an image request",
+        "delay an image response",
+        "go offline and back online"
+      ],
+      "assertions": [
+        "no wrong image",
+        "unconfirmed operation is not shown as success",
+        "sync state is visible",
+        "no automatic inference or old-intent replay after recovery"
+      ]
+    },
+    "UI06": {
+      "title": "freeze, logical removal and append",
+      "data": "real host",
+      "steps": [
+        "freeze a FINAL export",
+        "logically remove a later source",
+        "append draws and return to the original position"
+      ],
+      "assertions": [
+        "frozen identities/files unchanged",
+        "subsequent numbering follows the original rule",
+        "already-authorized task behavior remains explainable"
+      ]
+    }
+  }
+}

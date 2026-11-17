@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "description": "DISK01—DISK05 target writes, grouped by the product location that must hit ENOSPC. Each stage is executed by tests/host_acceptance/storage_writer.py through the product primitive named in 'primitive'. 'selftest_fault' marks the stage the protocol self-test injects a simulated failure into; it is never used for real DISK evidence.",
+  "scenarios": {
+    "DISK01": {
+      "title": "创建检查点写入与原图快照复制",
+      "invariants": ["originals_unchanged", "no_ready_state", "no_inference_submitted", "seed_reused"],
+      "stages": [
+        {
+          "id": "checkpoint",
+          "label": "创建检查点 JSON",
+          "op": "publish_json_once",
+          "rel": "workspace/creation/checkpoint.json",
+          "primitive": "util.publish_json_once",
+          "selftest_fault": true
+        },
+        {
+          "id": "snapshot",
+          "label": "原图快照复制",
+          "op": "copy_file_verified",
+          "src": "source/original-a.png",
+          "rel": "workspace/snapshots/SRC-0001.png",
+          "primitive": "util.copy_file_verified"
+        }
+      ]
+    },
+    "DISK02": {
+      "title": "OUT 文件写入与完整清单发布",
+      "invariants": ["published_unchanged", "no_partial_accepted", "single_accepted_manifest", "seed_reused"],
+      "stages": [
+        {
+          "id": "out_write",
+          "label": "OUT 文件无覆盖发布",
+          "op": "temp_then_publish",
+          "rel": "workspace/results/JOB-0001/SRC-0001/DRAW-0001/ATTEMPT-01/OUT-0001.png",
+          "primitive": "util.write_temp_file + util.publish_noreplace",
+          "selftest_fault": true
+        },
+        {
+          "id": "manifest_publish",
+          "label": "ATTEMPT 清单发布",
+          "op": "publish_json_once",
+          "rel": "workspace/results/JOB-0001/SRC-0001/DRAW-0001/ATTEMPT-01/manifest.json",
+          "primitive": "util.publish_json_once"
+        }
+      ]
+    },
+    "DISK03": {
+      "title": "终态收据写入与 SQLite 主库/WAL 提交",
+      "invariants": ["published_unchanged", "single_accepted_manifest", "db_single_commit", "no_auto_resubmit"],
+      "stages": [
+        {
+          "id": "receipt",
+          "label": "终态收据写入",
+          "op": "terminal_receipt",
+          "rel": "workspace/job/receipts/ATTEMPT-01/terminal.json",
+          "primitive": "storage.write_terminal_receipt",
+          "selftest_fault": true
+        },
+        {
+          "id": "db_commit",
+          "label": "SQLite 事务提交（WAL/FULL）",
+          "op": "sqlite_commit",
+          "primitive": "db.Database.tx + schema.apply_migrations"
+        }
+      ]
+    },
+    "DISK04": {
+      "title": "冻结批次逐项导出复制",
+      "invariants": ["published_unchanged", "frozen_members_unchanged", "resume_no_refreeze"],
+      "stages": [
+        {
+          "id": "export_item_1",
+          "label": "导出第 1 项复制",
+          "op": "copy_file_verified",
+          "src": "results/JOB-0001/SRC-0001/DRAW-0001/ATTEMPT-01/OUT-0001.png",
+          "rel": "workspace/exports/item-0001.png",
+          "primitive": "util.copy_file_verified",
+          "selftest_fault": false
+        },
+        {
+          "id": "export_item_2",
+          "label": "导出第 2 项复制（首项成功后）",
+          "op": "copy_file_verified",
+          "src": "results/JOB-0001/SRC-0002/DRAW-0001/ATTEMPT-01/OUT-0001.png",
+          "rel": "workspace/exports/item-0002.png",
+          "primitive": "util.copy_file_verified",
+          "selftest_fault": true
+        }
+      ]
+    },
+    "DISK05": {
+      "title": "备份写入、校验与登记",
+      "invariants": ["published_unchanged", "last_valid_backup_kept", "backup_single_registration"],
+      "stages": [
+        {
+          "id": "backup_copy",
+          "label": "备份数据库复制",
+          "op": "copy_file_verified",
+          "src": "data/gacha.sqlite3",
+          "rel": "workspace/backups/backup-run-01.sqlite3",
+          "primitive": "util.copy_file_verified",
+          "selftest_fault": true
+        },
+        {
+          "id": "backup_register",
+          "label": "备份校验与登记",
+          "op": "publish_json_once",
+          "rel": "workspace/backups/backup-run-01.json",
+          "primitive": "util.publish_json_once"
+        }
+      ]
+    }
+  }
+}

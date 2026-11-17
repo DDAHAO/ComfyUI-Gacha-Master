@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "description": "Reusable acceptance scenarios. Aliases 1x1/3x5/555 remain in the tool; this file adds the single-source 101-OUT pagination boundary. Replace representative-5x10 with the user's recorded daily scale before using it as a target-workflow statement.",
+  "scenarios": {
+    "1x101": {
+      "sources": 1,
+      "count_per_source": 101,
+      "outputs_per_draw": 1,
+      "description": "Single source, 101 OUT: crosses 50/51 and 100/101 result-page boundaries."
+    },
+    "representative-5x10": {
+      "sources": 5,
+      "count_per_source": 10,
+      "outputs_per_draw": 1,
+      "description": "Small representative batch for a first daily-style run; not a claim about the user's recorded scale."
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# ComfyUI Gacha Master runtime dependencies.
+#
+# Pillow and aiohttp are already required and shipped by ComfyUI.  The plugin
+# intentionally adds no new runtime dependency and must not be installed with a
+# command that upgrades torch/CUDA/Pillow/aiohttp.
+#
+# If a future ComfyUI build omits one of them, install only the missing package
+# into the ComfyUI Python environment after checking its version:
+#   Pillow>=10.1.0
+#   aiohttp>=3.11.8
