@@ -5,6 +5,8 @@ import os
 import sys
 import time
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,6 +47,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def put(self, path, body=None):
         response = await self.client.put("/gacha_master/v1" + path, json=body or {})
+        return response, await response.json()
+
+    async def delete_job(self, job, confirmation_name):
+        response = await self.client.delete(
+            f"/gacha_master/v1/jobs/{job['id']}", json={"confirmation_name": confirmation_name}
+        )
         return response, await response.json()
 
     async def create_job(self, key="api-key", count=1, names=("a.png", "b.png")):
@@ -289,14 +297,15 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         _, detail = await self.get(f"/jobs/{job['id']}")
         response, payload = await self.post(
             f"/sources/{source['id']}/append",
-            {"count": 2, "priority": "priority", "expected_version": detail["data"]["row_version"]},
+            {"count": 2, "expected_version": detail["data"]["row_version"]},
             headers={"Idempotency-Key": "append-fixed"},
         )
         self.assertEqual(response.status, 200, payload)
         self.assertEqual(payload["data"]["draw_start"], 2)
+        self.assertEqual(self.h.runtime.repo.get_block(payload["data"]["block_id"])["priority"], 0)
         response, payload2 = await self.post(
             f"/sources/{source['id']}/append",
-            {"count": 2, "priority": "priority", "expected_version": detail["data"]["row_version"]},
+            {"count": 2, "expected_version": detail["data"]["row_version"]},
             headers={"Idempotency-Key": "append-fixed"},
         )
         self.assertEqual(payload2["data"]["block_id"], payload["data"]["block_id"])
@@ -306,6 +315,101 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(started["data"]["status"], "RUNNING")
         final = await self.wait_job(job["id"])
         self.assertEqual(final["status"], "COMPLETED", final)
+
+    async def test_delete_project_requires_name_and_preserves_exports(self):
+        job = await self.create_job(key="delete-this", names=("target.png",))
+        job_id = job["id"]
+        repo = self.h.runtime.repo
+        record = repo.get_job(job_id)
+        self.h.engine.auto_complete = False
+        await self.post(f"/jobs/{job_id}/start")
+        response, _ = await self.delete_job(job, job["display_name"])
+        self.assertEqual(response.status, 409)
+        self.assertTrue(Path(record["result_dir"]).is_dir())
+        self.h.engine.auto_complete = True
+        self.assertEqual((await self.wait_job(job_id))["status"], "COMPLETED")
+
+        result_dir = Path(record["result_dir"])
+        generated = list(result_dir.rglob("*.png"))
+        self.assertEqual(len(generated), 2)
+        source = repo.all_sources(job_id)[0]
+        _, listed = await self.get(f"/sources/{source['id']}/outputs")
+        selected, unselected = listed["data"]["items"]
+        await self.put(f"/outputs/{selected['id']}/selection", {"selected": True})
+        exports = self.h.runtime.exports
+        draft = exports.preview(job_id, kind="QUICK", target_root=self.h.export_root)
+        copying = exports.confirm(draft["id"])
+        self.assertEqual(copying["status"], "COPYING")
+        response, _ = await self.delete_job(job, job["display_name"])
+        self.assertEqual(response.status, 409)
+        exported = exports.copy_export(copying["id"])
+        self.assertEqual(exported["status"], "COMPLETED")
+        batch_dir = Path(exported["batch_dir"])
+        export_files = {path: path.read_bytes() for path in batch_dir.rglob("*") if path.is_file()}
+        self.assertEqual(sum(path.suffix == ".png" for path in export_files), 1)
+        self.assertIn(batch_dir / "manifest.json", export_files)
+
+        other = await self.create_job(key="keep-this", names=("other.png",))
+        self.assertEqual(other["display_name"], job["display_name"])
+        backup = self.h.runtime.service.create_backup()
+        for wrong_name in (None, "", job["display_id"], job["display_name"] + " "):
+            response, payload = await self.delete_job(job, wrong_name)
+            self.assertEqual(response.status, 400, payload)
+            self.assertTrue(all(path.is_file() for path in generated))
+
+        response, payload = await self.delete_job(job, job["display_name"])
+        self.assertEqual(response.status, 200, payload)
+        self.assertEqual(payload["data"], {"id": job_id, "deleted": True})
+        self.assertFalse(result_dir.exists())
+        self.assertFalse(Path(record["job_dir"]).exists())
+        self.assertTrue((Path(self.h.input_root) / "target.png").is_file())
+        for path, before in export_files.items():
+            self.assertEqual(path.read_bytes(), before)
+        for path in (f"/jobs/{job_id}", f"/outputs/{selected['id']}/image", f"/outputs/{unselected['id']}/image"):
+            response, _ = await self.get(path)
+            self.assertEqual(response.status, 404)
+        _, listed = await self.get("/jobs")
+        self.assertEqual([item["id"] for item in listed["data"]["items"]], [other["id"]])
+        self.assertEqual(self.h.runtime.db.query_all("PRAGMA foreign_key_check"), [])
+
+        response, payload = await self.post(f"/backups/{backup['id']}/restore")
+        self.assertEqual(response.status, 200, payload)
+        _, listed = await self.get("/jobs")
+        self.assertEqual([item["id"] for item in listed["data"]["items"]], [other["id"]])
+        for path, before in export_files.items():
+            self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.h.runtime.db.query_all("PRAGMA foreign_key_check"), [])
+
+    async def test_delete_project_retries_an_interrupted_file_removal(self):
+        job = await self.create_job(key="delete-retry")
+        record = self.h.runtime.repo.get_job(job["id"])
+        with patch("comfyui_gacha_master.backend.deletion.shutil.rmtree", side_effect=PermissionError("busy")):
+            response, payload = await self.delete_job(job, job["display_name"])
+        self.assertEqual(response.status, 409, payload)
+        self.assertEqual(payload["error"]["code"], "JOB_DELETE_INCOMPLETE")
+        self.assertTrue(Path(record["result_dir"]).is_dir())
+        response, _ = await self.get(f"/jobs/{job['id']}")
+        self.assertEqual(response.status, 404)
+
+        for _ in range(2):
+            response, payload = await self.delete_job(job, job["display_name"])
+            self.assertEqual(response.status, 200, payload)
+        self.assertFalse(Path(record["result_dir"]).exists())
+        self.assertFalse(Path(record["job_dir"]).exists())
+
+    async def test_project_deletion_finishes_after_restart(self):
+        job = await self.create_job(key="delete-restart")
+        record = self.h.runtime.repo.get_job(job["id"])
+        with patch("comfyui_gacha_master.backend.deletion.shutil.rmtree", side_effect=PermissionError("busy")):
+            response, payload = await self.delete_job(job, job["display_name"])
+        self.assertEqual(response.status, 409, payload)
+        self.assertEqual(payload["error"]["code"], "JOB_DELETE_INCOMPLETE")
+
+        self.h.runtime.close()
+        await self.h.start()
+        self.assertIsNone(self.h.runtime.repo.get_job(job["id"]))
+        self.assertFalse(Path(record["result_dir"]).exists())
+        self.assertFalse(Path(record["job_dir"]).exists())
 
     async def test_export_endpoints_and_backups(self):
         job = await self.create_job(key="export-job")

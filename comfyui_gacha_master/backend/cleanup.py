@@ -815,6 +815,7 @@ class StorageCleanupManager:
             ),
         }
         with self.db.tx() as conn:
+            self._job(job["id"])
             conn.execute(
                 "UPDATE cleanup_runs SET status='EXPIRED', updated_at=? "
                 "WHERE job_id=? AND status='PREVIEW'",
@@ -1237,7 +1238,7 @@ class StorageCleanupManager:
                         retryable=True,
                         details={"cleanup_id": cleanup_id, "holder": self.repo.maintenance(conn)},
                     )
-                conn.execute(
+                updated = conn.execute(
                     "UPDATE cleanup_runs SET status='RUNNING', confirmed_at=?, started_at=?, "
                     "confirmation_json=?, updated_at=? WHERE id=? AND status='PREVIEW'",
                     (
@@ -1255,6 +1256,8 @@ class StorageCleanupManager:
                         cleanup_id,
                     ),
                 )
+                if not updated.rowcount:
+                    raise not_found("清理预览不存在。", cleanup_id=cleanup_id)
             # Everything below happens outside a DB transaction.  The
             # maintenance slot prevents business writes from changing facts
             # while hashes are checked.

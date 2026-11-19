@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
@@ -20,6 +21,7 @@ from . import storage
 from .backups import BackupManager
 from .config import Settings, save_settings
 from .db import Database
+from .deletion import JobDeletion
 from .errors import GachaError, conflict, not_found
 from .images import validate_image_bytes
 from .inputs import ImageInfo, InputManager
@@ -169,6 +171,7 @@ class Service:
         scheduler: Any = None,
         exports: Any = None,
         cleanup: Any = None,
+        deletion: Optional[JobDeletion] = None,
         capabilities_provider: Optional[Callable[[], Any]] = None,
         include_metadata: bool = True,
     ) -> None:
@@ -181,6 +184,7 @@ class Service:
         self.scheduler = scheduler
         self.exports = exports
         self.cleanup = cleanup
+        self.deletion = deletion or JobDeletion(db, repo, paths)
         self.capabilities_provider = capabilities_provider
         self.include_metadata = include_metadata
         self.creation: Any = None
@@ -302,6 +306,8 @@ class Service:
                 job_id = _stable_id(f"job/{idempotency_key}")
             else:
                 job_id = uuid4()
+            if idempotency_key and self.deletion.has_receipt(job_id):
+                raise not_found("该任务已删除。", job_id=job_id)
             existing = self.repo.get_job(job_id)
             if existing is not None:
                 checkpoint = os.path.join(existing["job_dir"], "create_request.json")
@@ -889,7 +895,7 @@ class Service:
         source_id: str,
         *,
         count: int,
-        priority: str = "tail",
+        priority: str = "priority",
         expected_version: Optional[int] = None,
         idempotency_key: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -1258,6 +1264,13 @@ class Service:
             } if attempt else None
         return dto
 
+    def delete_job(self, job_id: str, confirmation_name: Any) -> dict[str, Any]:
+        export_guard = self.exports.guard_job_deletion(job_id) if self.exports is not None else nullcontext()
+        with self.write_lock, export_guard:
+            return self.deletion.delete(
+                job_id, confirmation_name, scheduler=self.scheduler, creation=self.creation
+            )
+
     def list_jobs(self, *, limit: int = 50, cursor: Optional[str] = None) -> dict[str, Any]:
         cursor_created = cursor_id = None
         if cursor:
@@ -1459,6 +1472,7 @@ class Service:
             if self.creation is not None:
                 self.creation.stop()
             result = self.backups.restore(backup_id)
+            self.deletion.reconcile()
             if self.cleanup is not None:
                 # A restored database may predate deliberate deletions.  The
                 # external journal is the authority; re-import retention before

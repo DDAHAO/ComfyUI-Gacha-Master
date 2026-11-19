@@ -94,6 +94,7 @@ class Api:
         ("post", "/jobs", "create_job"),
         ("get", "/jobs", "list_jobs"),
         ("get", "/jobs/{job_id}", "job_detail"),
+        ("delete", "/jobs/{job_id}", "delete_job"),
         ("post", "/jobs/{job_id}/start", "start_job"),
         ("post", "/jobs/{job_id}/pause", "pause_job"),
         ("post", "/jobs/{job_id}/abandon-creation", "abandon_creation"),
@@ -406,6 +407,8 @@ class Api:
             )
         else:
             result = await self._run_sync(self.service.create_job, body)
+        if await self._run_sync(self.service.deletion.has_receipt, result["id"]):
+            raise GachaError("NOT_FOUND", "该任务已删除。", job_id=result["id"])
         return result, 201
 
     async def list_jobs(self, request: web.Request):
@@ -415,6 +418,14 @@ class Api:
 
     async def job_detail(self, request: web.Request):
         return await self._run_sync(self.service.job_detail, request.match_info["job_id"])
+
+    async def delete_job(self, request: web.Request):
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            raise GachaError("BAD_REQUEST", "请求必须是 JSON 对象。")
+        return await self._run_sync(
+            self.service.delete_job, request.match_info["job_id"], body.get("confirmation_name")
+        )
 
     async def start_job(self, request: web.Request):
         body = await _read_json(request) if request.can_read_body else {}
@@ -553,7 +564,7 @@ class Api:
                 self.service.append_block,
                 source_id,
                 count=int(body.get("count") or 0),
-                priority=str(body.get("priority") or "tail"),
+                priority=str(body.get("priority") or "priority"),
                 expected_version=body.get("expected_version"),
                 idempotency_key=key,
             )

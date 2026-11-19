@@ -77,6 +77,7 @@ class Scheduler:
         self._cancel_dispatched: set[str] = set()
         self._workflow_cache: dict[str, tuple[str, dict[str, Any]]] = {}
         self._last_long_warning: dict[str, float] = {}
+        self.processing_job_id: Optional[str] = None
         self.last_loop_error: Optional[str] = None
 
     # -------------------------------------------------------------- thread
@@ -146,26 +147,37 @@ class Scheduler:
 
     # ---------------------------------------------------------------- step
     async def step(self) -> None:
+        try:
+            await self._step()
+        finally:
+            self.processing_job_id = None
+
+    async def _step(self) -> None:
         if self.db.fatal:
             return
-        slot = self.repo.get_slot()
-        attempt_id = slot.get("attempt_id")
+        # Publish the job before releasing the DB lock so a simultaneous
+        # deletion can see preparation and finalization work outside the slot.
+        with self.db.read():
+            slot = self.repo.get_slot()
+            attempt_id = slot.get("attempt_id")
+            attempt = self.repo.get_attempt(attempt_id) if attempt_id else None
+            draw = self.repo.get_draw(attempt["draw_id"]) if attempt else None
+            job = self.repo.get_job(draw["job_id"]) if draw else None
+            if not attempt_id:
+                job = self.repo.active_run_job()
+            self.processing_job_id = job["id"] if job else None
         if attempt_id:
-            attempt = self.repo.get_attempt(attempt_id)
             if attempt is None:
                 # Orphan slot: record and clear only if no matching attempt can
                 # exist.  This is a DB inconsistency, not a reason to re-submit.
                 self.repo.clear_slot_if_owned(attempt_id, actor="scheduler-orphan")
                 return
-            draw = self.repo.get_draw(attempt["draw_id"])
-            job = self.repo.get_job(draw["job_id"]) if draw else None
             if draw is None or job is None:
                 self.repo.clear_slot_if_owned(attempt_id, actor="scheduler-orphan")
                 return
             await self._monitor_attempt(job, draw, attempt)
             return
 
-        job = self.repo.active_run_job()
         if job is None:
             return
         if job["status"] == JobStatus.PAUSING or job["run_intent"] in (RunIntent.PAUSE_NOW, RunIntent.PAUSE_SAFE):

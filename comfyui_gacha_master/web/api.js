@@ -106,6 +106,11 @@ export class ApiClient {
       .then((payload) => payload.data);
   }
   job(jobId, { signal } = {}) { return this.request(`/jobs/${jobId}`, { signal }).then((payload) => payload.data); }
+  deleteJob(jobId, confirmationName) {
+    return this.request(`/jobs/${jobId}`, {
+      method: "DELETE", body: { confirmation_name: confirmationName },
+    }).then((payload) => payload.data);
+  }
   startJob(jobId, body, key) { return this.post(`/jobs/${jobId}/start`, body, { key }); }
   pauseJob(jobId, mode) { return this.post(`/jobs/${jobId}/pause`, { mode }); }
   abandonCreation(jobId, reason) { return this.post(`/jobs/${jobId}/abandon-creation`, { reason }); }

@@ -23,6 +23,7 @@ from .cleanup import StorageCleanupManager
 from .config import AppPaths, Settings, default_data_root, default_results_root, load_settings, save_settings, validate_results_location
 from .creation import CreationManager
 from .db import Database
+from .deletion import JobDeletion
 from .errors import GachaError
 from .exports import ExportManager
 from .inputs import InputManager
@@ -213,6 +214,8 @@ class Runtime:
             # Journal reconciliation must happen before ordinary output
             # verification: a deliberate deletion recovered from an older
             # database must not be reclassified as an accidental MISSING file.
+            deletion = JobDeletion(db, repo, paths)
+            deletion.reconcile()
             cleanup_report = cleanup.reconcile_startup()
             LOGGER.info("cleanup reconcile: %s", cleanup_report)
             report = await self.recovery.startup(api_engine, boot_id=self.boot_id)
@@ -242,6 +245,7 @@ class Runtime:
                 scheduler=scheduler,
                 exports=exports,
                 cleanup=cleanup,
+                deletion=deletion,
                 include_metadata=self.include_metadata,
             )
             self.service = service

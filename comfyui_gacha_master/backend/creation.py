@@ -95,7 +95,6 @@ class CreationManager:
                 if claimed is None:
                     break
                 job_id, generation = claimed
-                self.processing_job_id = job_id
                 try:
                     self._process(job_id, generation)
                 except _Cancelled:
@@ -133,7 +132,9 @@ class CreationManager:
                 "updated_at=? WHERE job_id=?",
                 (generation, utc_now(), row["job_id"]),
             )
-            return str(row["job_id"]), generation
+            job_id = str(row["job_id"])
+            self.processing_job_id = job_id
+            return job_id, generation
 
     # ---------------------------------------------------------- progress I/O
     def _guard(self, conn, job_id: str, generation: int) -> Mapping[str, Any]:

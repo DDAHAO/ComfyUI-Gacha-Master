@@ -78,6 +78,18 @@ test("selection uses PUT with a target boolean and no toggle semantics", async (
   assert.deepEqual(JSON.parse(calls[0].init.body), { selected: true, expected_version: 1 });
 });
 
+test("project deletion sends the typed name with the chosen job ID", async () => {
+  const client = new ApiClient({
+    fetchApi: async (path, init) => {
+      assert.equal(path, "/gacha_master/v1/jobs/job-id");
+      assert.equal(init.method, "DELETE");
+      assert.deepEqual(JSON.parse(init.body), { confirmation_name: "测试项目" });
+      return response({ data: { id: "job-id", deleted: true } });
+    },
+  });
+  assert.deepEqual(await client.deleteJob("job-id", "测试项目"), { id: "job-id", deleted: true });
+});
+
 test("upload sends multipart to /uploads and validates one item", async () => {
   const calls = [];
   const comfyApi = {

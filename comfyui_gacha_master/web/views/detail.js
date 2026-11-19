@@ -1429,13 +1429,11 @@ export function mountDetail(container, ctx, jobId) {
   function openAppendModal(source, maxNo) {
     const dialog = modal({ title: `追加抽卡 · SRC-${String(source.source_order).padStart(4, "0")}` });
     const countInput = h("input", { class: "gm-input", type: "number", min: 1, max: 100000, value: 5, "data-autofocus": "1" });
-    let priority = "tail";
     let submitting = false;
     const prioritySelect = h("select", { class: "gm-input" },
-      h("option", { value: "tail", selected: true }, "排到末尾（默认）"),
-      h("option", { value: "priority" }, "优先执行（当前项之后）"),
+      h("option", { value: "priority", selected: true }, "优先执行（当前项之后）"),
+      h("option", { value: "tail" }, "排到末尾"),
     );
-    prioritySelect.addEventListener("change", () => { priority = prioritySelect.value; updatePreview(); });
     const preview = h("div", { class: "gm-append-preview" });
     const status = h("div");
     function updatePreview() {
@@ -1461,7 +1459,9 @@ export function mountDetail(container, ctx, jobId) {
       submitting = true;
       confirmButton.disabled = true;
       try {
-        const result = await ctx.api.append(source.id, { count: value, priority, expected_version: job.row_version }, idempotencyKey());
+        const result = await ctx.api.append(source.id, {
+          count: value, priority: prioritySelect.value, expected_version: job.row_version,
+        }, idempotencyKey());
         ctx.notify(`已追加 ${result.count} 次（DRAW ${result.draw_start}—${result.draw_end}）。`, "ok");
         dialog.close("saved");
         await loadJob();

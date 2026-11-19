@@ -11,6 +11,7 @@ import os
 import shutil
 import threading
 import uuid
+from contextlib import contextmanager
 from typing import Any, Iterable, Mapping, Optional
 
 from . import storage
@@ -58,6 +59,15 @@ class ExportManager:
         self.backup_manager = backup_manager
         self._copy_lock = threading.Lock()
         self._copying: set[str] = set()
+
+    @contextmanager
+    def guard_job_deletion(self, job_id: str):
+        with self._copy_lock:
+            for export_id in self._copying:
+                export = self.repo_export(export_id)
+                if export and export["job_id"] == job_id:
+                    raise GachaError("STATE_CONFLICT", "导出正在进行，请等待完成后再删除。", retryable=True)
+            yield
 
     # ----------------------------------------------------------- preview
     def preview(
@@ -123,6 +133,8 @@ class ExportManager:
         }
         now = utc_now()
         with self.db.tx() as conn:
+            if self.repo.get_job(job_id) is None:
+                raise not_found("任务不存在。", job_id=job_id)
             conn.execute(
                 """
                 INSERT INTO exports(id, job_id, kind, layout, status, target_root, draft_version, row_version,
@@ -279,6 +291,7 @@ class ExportManager:
         summary = self.repo.source_summary(source_id)
         now = utc_now()
         with self.db.tx() as conn:
+            self._draft_export(export_id)
             conn.execute(
                 """
                 INSERT INTO export_reviews(export_id, source_id, decision, selection_version, result_revision,

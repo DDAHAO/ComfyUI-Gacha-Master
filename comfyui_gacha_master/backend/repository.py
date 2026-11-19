@@ -133,6 +133,42 @@ class Repository:
             )
         return [self._decode_job(dict(row)) for row in rows]
 
+    def delete_job_records(self, conn: sqlite3.Connection, job_id: str) -> None:
+        """Remove the job's records in foreign-key order, keeping the event log."""
+        sources = "SELECT id FROM sources WHERE job_id=?"
+        draws = "SELECT id FROM draws WHERE job_id=?"
+        attempts = f"SELECT id FROM attempts WHERE draw_id IN ({draws})"
+        outputs = f"SELECT id FROM outputs WHERE attempt_id IN ({attempts})"
+        exports = "SELECT id FROM exports WHERE job_id=?"
+        conn.execute(
+            "UPDATE execution_slot SET attempt_id=NULL, owner=NULL, acquired_at=NULL, version=version+1 "
+            f"WHERE attempt_id IN ({attempts})",
+            (job_id,),
+        )
+        for table, where in (
+            ("cleanup_items", "cleanup_id IN (SELECT id FROM cleanup_runs WHERE job_id=?)"),
+            ("cleanup_runs", "job_id=?"),
+            ("job_storage_state", "job_id=?"),
+            ("review_session_actions", "job_id=?"),
+            ("review_sessions", "job_id=?"),
+            ("export_items", f"export_id IN ({exports})"),
+            ("export_reviews", f"export_id IN ({exports})"),
+            ("exports", "job_id=?"),
+            ("selections", f"output_id IN ({outputs})"),
+            ("output_retention", f"output_id IN ({outputs})"),
+            ("outputs", f"attempt_id IN ({attempts})"),
+            ("attempts", f"draw_id IN ({draws})"),
+            ("seed_allocations", "job_id=?"),
+            ("draws", "job_id=?"),
+            ("blocks", "job_id=?"),
+            ("source_reviews", f"source_id IN ({sources})"),
+            ("sources", "job_id=?"),
+            ("creation_progress", "job_id=?"),
+            ("jobs", "id=?"),
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE {where}", (job_id,))
+        self._event(conn, job_id=job_id, entity_type="JOB", entity_id=job_id, action="JOB_DELETED", actor="user")
+
     def update_job(
         self,
         job_id: str,

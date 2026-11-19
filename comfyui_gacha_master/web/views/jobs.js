@@ -1,5 +1,5 @@
 import {
-  button, clear, count, errorBox, fmtTime, h, progressBar, statusBadge, RUN_INTENT,
+  button, clear, count, errorBox, fmtTime, h, labeled, modal, progressBar, statusBadge, RUN_INTENT,
 } from "../dom.js";
 import { createDelayedSkeleton, skeletonJobCard, skeletonList } from "../components/skeleton.js";
 
@@ -16,6 +16,7 @@ export function mountJobs(container, ctx) {
   let lastSuccessAt = null;
   let skeleton = null;
   const cards = new Map();
+  const deletedJobIds = new Set();
 
   const header = h("div", { class: "gm-section-head" },
     h("div", null,
@@ -82,7 +83,7 @@ export function mountJobs(container, ctx) {
         ctx.navigate("detail", { jobId: job.id });
       },
       onkeydown: (event) => {
-        if (event.key === "Enter") {
+        if (event.target === event.currentTarget && event.key === "Enter") {
           event.preventDefault();
           ctx.navigate("detail", { jobId: job.id });
         }
@@ -98,14 +99,71 @@ export function mountJobs(container, ctx) {
       errorHost,
       h("div", { class: "gm-job-foot" },
         created,
-        h("button", {
-          class: "gm-link-btn",
-          type: "button",
-          onclick: (event) => { event.stopPropagation(); ctx.navigate("detail", { jobId: job.id }); },
-        }, "查看详情 →"),
+        h("div", { class: "gm-inline-actions" },
+          button("删除项目", () => openDelete(job), { kind: "danger" }),
+          h("button", {
+            class: "gm-link-btn",
+            type: "button",
+            onclick: () => ctx.navigate("detail", { jobId: job.id }),
+          }, "查看详情 →"),
+        ),
       ),
     );
     return { node, title, idText, badgeHost, stats, progressHost, current, errorHost, created };
+  }
+
+  function openDelete(job) {
+    const dialog = modal({ title: "删除项目" });
+    const projectName = job.display_name || job.display_id;
+    const formId = `gm-delete-${job.id}`;
+    const input = h("input", {
+      class: "gm-input", type: "text", autocomplete: "off", "data-autofocus": "1",
+    });
+    input.spellcheck = false;
+    const status = h("div", { role: "status" });
+    const cancel = button("取消", () => dialog.close("cancel"), { kind: "muted" });
+    const confirm = button("永久删除", null, { kind: "danger", disabled: true, type: "submit" });
+    confirm.setAttribute("form", formId);
+    let submitting = false;
+    dialog.body.append(
+      h("p", null, "将永久删除项目、项目内的原图快照及全部生成图片（含已入选图片）。导出文件和项目外的原图会保留。"),
+      h("p", { style: { overflowWrap: "anywhere" } }, "项目名称：", h("strong", null, projectName)),
+      h("form", { id: formId, onsubmit: submit }, labeled("输入项目名称以确认", input), status),
+    );
+    dialog.footer.append(cancel, confirm);
+    input.addEventListener("input", () => { confirm.disabled = input.value !== projectName; });
+
+    function removeCard() {
+      deletedJobIds.add(job.id);
+      if (destroyed) return;
+      items = items.filter((item) => item.id !== job.id);
+      renderList();
+    }
+
+    async function submit(event) {
+      event.preventDefault();
+      if (submitting || input.value !== projectName) return;
+      submitting = true;
+      input.disabled = cancel.disabled = confirm.disabled = true;
+      confirm.textContent = "正在删除…";
+      clear(status);
+      try {
+        await ctx.api.deleteJob(job.id, input.value);
+        removeCard();
+        dialog.close("saved");
+        ctx.notify("项目已删除。", "ok");
+        refreshFirst();
+      } catch (error) {
+        if (error.code === "JOB_DELETE_INCOMPLETE") removeCard();
+        if (dialog.isOpen()) status.replaceChildren(errorBox(error));
+        else ctx.notify(error.message || "删除项目失败。", "error");
+      } finally {
+        submitting = false;
+        input.disabled = cancel.disabled = false;
+        confirm.disabled = input.value !== projectName;
+        confirm.textContent = "永久删除";
+      }
+    }
   }
 
   function updateJobCard(refs, job) {
@@ -143,6 +201,12 @@ export function mountJobs(container, ctx) {
       return;
     }
     list.setAttribute("aria-busy", "false");
+    clear(more);
+    if (pageIndex > 0) {
+      more.appendChild(h("span", { class: "gm-help" }, `正在查看较早任务（第 ${pageIndex + 1} 页）。本页不会自动刷新。`));
+      more.appendChild(button("回到最新任务", () => loadFirst({ reset: true }), { kind: "primary" }));
+    }
+    if (cursor) more.appendChild(button("加载更早任务", () => loadMore(), { kind: "muted" }));
     if (!items.length) {
       for (const card of cards.values()) card.node.remove();
       cards.clear();
@@ -152,7 +216,6 @@ export function mountJobs(container, ctx) {
         h("p", { class: "gm-help" }, "创建任务只进入任务详情，需要显式点击“开始 / 继续”。"),
         button("新建任务", () => ctx.navigate("create"), { kind: "primary" }),
       ));
-      clear(more);
       return;
     }
     // Remove the empty/error placeholder if it is still the only child.
@@ -177,12 +240,6 @@ export function mountJobs(container, ctx) {
         list.insertBefore(refs.node, list.children[index] || null);
       }
     });
-    clear(more);
-    if (pageIndex > 0) {
-      more.appendChild(h("span", { class: "gm-help" }, `正在查看较早任务（第 ${pageIndex + 1} 页）。本页不会自动刷新。`));
-      more.appendChild(button("回到最新任务", () => loadFirst({ reset: true }), { kind: "primary" }));
-    }
-    if (cursor) more.appendChild(button("加载更早任务", () => loadMore(), { kind: "muted" }));
   }
 
   async function loadFirst({ reset = false } = {}) {
@@ -196,7 +253,7 @@ export function mountJobs(container, ctx) {
     try {
       const payload = await ctx.api.listJobs(null);
       if (destroyed) return;
-      items = payload.items || [];
+      items = (payload.items || []).filter((job) => !deletedJobIds.has(job.id));
       cursor = payload.next_cursor;
       pageIndex = 0;
       loaded = true;
@@ -236,7 +293,7 @@ export function mountJobs(container, ctx) {
       // A finite page window: the previous page's cards are unmounted, so the
       // task list cannot grow without bound.  "回到最新任务" returns to the
       // first page; forward pagination makes older jobs reachable.
-      items = payload.items || [];
+      items = (payload.items || []).filter((job) => !deletedJobIds.has(job.id));
       cursor = payload.next_cursor;
       pageIndex += 1;
       error = null;
@@ -251,9 +308,7 @@ export function mountJobs(container, ctx) {
     }
   }
 
-  function refreshFirst() {
-    loadFirst({ reset: false });
-  }
+  function refreshFirst() { return loadFirst({ reset: false }); }
 
   function schedule() {
     clearTimeout(timer);
